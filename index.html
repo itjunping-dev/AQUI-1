@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Conciliación de Caja</title>
 
-    <!-- PWA Manifest and Meta Tags -->
+    <!-- PWA Manifest -->
     <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#1f2937"/>
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,59 +14,43 @@
     <link rel="apple-touch-icon" href="./icon-192.png">
     <link rel="icon" type="image/png" href="./icon-192.png">
 
-    <!-- Tailwind CSS for styling -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <!-- Babel for JSX compilation -->
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            /* PWA fullscreen styles */
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            -khtml-user-select: none;
-            -moz-user-select: none;
-            -ms-user-select: none;
-            user-select: none;
         }
-        /* Prevents pull-to-refresh, common in PWAs */
         body { overscroll-behavior-y: contain; }
         .page-enter { animation: fadeIn 0.3s ease-out; }
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        /* Improve mobile touch targets */
         button, input, select { min-height: 44px; }
         .touch-target { min-height: 44px; min-width: 44px; }
         
-        /* PWA specific styles */
-        @media all and (display-mode: standalone) {
-            body {
-                /* Additional styles for standalone mode */
-            }
-            header {
-                padding-top: env(safe-area-inset-top);
-            }
+        /* 防止输入框闪动 */
+        input, select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
         }
-        .install-pulse {
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
+        input:focus, select:focus {
+            outline: 2px solid #4f46e5;
+            outline-offset: 2px;
         }
     </style>
 </head>
 <body class="bg-gray-100">
     <div id="root"></div>
 
-    <!-- PWA Installation Prompt -->
+    <!-- PWA 安装提示 -->
     <div id="installPrompt" class="hidden fixed bottom-0 left-0 right-0 bg-indigo-600 text-white p-4 shadow-lg z-50">
         <div class="max-w-md mx-auto flex items-center justify-between">
             <div class="flex-1">
@@ -80,8 +64,8 @@
         </div>
     </div>
 
-    <!-- Firebase SDK -->
     <script type="module">
+        // Firebase 初始化
         document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js");
@@ -111,6 +95,7 @@
                 }
             } catch (error) {
                 console.error('Error loading Firebase:', error);
+                // 提供演示模式回退
                 window.firebaseSDK = null;
                 window.firebaseReady = true;
                 if (window.initReactApp) {
@@ -119,12 +104,12 @@
             }
         });
 
-        // PWA Service Worker Registration
+        // PWA Service Worker 注册
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
                 navigator.serviceWorker.register('./sw.js')
                     .then(function(registration) {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        console.log('ServiceWorker registered');
                     })
                     .catch(function(error) {
                         console.log('ServiceWorker registration failed: ', error);
@@ -132,19 +117,16 @@
             });
         }
 
-        // PWA Install Prompt
+        // PWA 安装提示逻辑
         let deferredPrompt;
         const installPrompt = document.getElementById('installPrompt');
         const installConfirm = document.getElementById('installConfirm');
         const installCancel = document.getElementById('installCancel');
 
         window.addEventListener('beforeinstallprompt', (e) => {
-            // Prevent Chrome 67 and earlier from automatically showing the prompt
             e.preventDefault();
-            // Stash the event so it can be triggered later
             deferredPrompt = e;
             
-            // Show install prompt after 5 seconds
             setTimeout(() => {
                 if (deferredPrompt && !window.matchMedia('(display-mode: standalone)').matches) {
                     installPrompt.classList.remove('hidden');
@@ -155,36 +137,27 @@
         installConfirm.addEventListener('click', async () => {
             if (!deferredPrompt) return;
             
-            // Show the install prompt
             deferredPrompt.prompt();
-            
-            // Wait for the user to respond to the prompt
             const { outcome } = await deferredPrompt.userChoice;
             
             if (outcome === 'accepted') {
                 console.log('User accepted the install prompt');
-            } else {
-                console.log('User dismissed the install prompt');
             }
             
-            // Clear the saved prompt since it can't be used again
             deferredPrompt = null;
             installPrompt.classList.add('hidden');
         });
 
         installCancel.addEventListener('click', () => {
             installPrompt.classList.add('hidden');
-            // Hide for 1 week
             localStorage.setItem('installPromptDismissed', Date.now());
         });
 
-        // Check if prompt was recently dismissed
         const lastDismissed = localStorage.getItem('installPromptDismissed');
         if (lastDismissed && (Date.now() - lastDismissed) < 7 * 24 * 60 * 60 * 1000) {
             window.addEventListener('beforeinstallprompt', (e) => {
                 e.preventDefault();
                 deferredPrompt = e;
-                // Don't show automatically if recently dismissed
             });
         }
     </script>
@@ -202,15 +175,23 @@
                 getFirestore, doc, setDoc, collection, onSnapshot, serverTimestamp, getDoc, deleteDoc
             } = window.firebaseSDK;
 
-            const { useState, useEffect, useCallback, StrictMode } = React;
+            const { useState, useEffect, useCallback, useRef, StrictMode } = React;
 
-            // --- Firebase Initialization ---
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            // --- Firebase 配置 ---
+            const appId = 'default-app-id';
+            // 在这里添加您的 Firebase 配置
+            const firebaseConfig = {
+                // apiKey: "your-api-key",
+                // authDomain: "your-project.firebaseapp.com",
+                // projectId: "your-project-id",
+                // storageBucket: "your-project.appspot.com",
+                // messagingSenderId: "123456789",
+                // appId: "your-app-id"
+            };
+            const initialAuthToken = null;
 
             let app, db, auth;
-            if (Object.keys(firebaseConfig).length > 0) {
+            if (Object.keys(firebaseConfig).length > 0 && firebaseConfig.apiKey) {
                 try {
                     app = initializeApp(firebaseConfig);
                     db = getFirestore(app);
@@ -222,7 +203,7 @@
                 console.warn("Firebase no está configurado.");
             }
             
-            // --- App Constants (Spanish Translation) ---
+            // --- 应用常量 ---
             const PAYMENT_METHODS = {
                 'tarjeta': 'Tarjeta Bancaria', 
                 'divisa': 'Divisa/Dólar',
@@ -245,11 +226,11 @@
             
             const getShiftName = (shiftCode) => (shiftCode === '1' ? "Mañana" : (shiftCode === '2' ? "Tarde" : "Desconocido"));
 
-            // --- Reusable UI Components (Spanish Translation) ---
+            // --- UI 组件 ---
             const Page = ({ children }) => <div className="page-enter">{children}</div>;
             
             const Header = ({ title, onBack }) => (
-                <header className="bg-gray-800 text-white p-4 text-center sticky top-0 z-10 shadow-md flex items-center justify-center safe-area-top">
+                <header className="bg-gray-800 text-white p-4 text-center sticky top-0 z-10 shadow-md flex items-center justify-center">
                     {onBack && (
                         <button onClick={onBack} className="absolute left-4 text-2xl font-bold text-white touch-target p-2">&larr;</button>
                     )}
@@ -265,7 +246,7 @@
             );
             
             const CustomModal = ({ title, message, onClose, onConfirm, confirmText = 'Confirmar' }) => (
-                <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 safe-area-inset">
+                <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center transform transition-all scale-100 opacity-100">
                         <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>
                         <p className="text-gray-600 mb-4">{message}</p>
@@ -286,22 +267,20 @@
             );
             
             const Loader = ({ message }) => (
-                 <div className="fixed inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center z-50 safe-area-inset">
+                 <div className="fixed inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center z-50">
                     <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
                     <p className="text-white mt-4">{message}</p>
                 </div>
             );
 
-            // PWA Install Button Component
+            // PWA 安装按钮组件
             const PWAInstallButton = () => {
                 const [isInstallable, setIsInstallable] = useState(false);
                 const [isStandalone, setIsStandalone] = useState(false);
 
                 useEffect(() => {
-                    // Check if app is already installed
                     setIsStandalone(window.matchMedia('(display-mode: standalone)').matches);
                     
-                    // Listen for beforeinstallprompt event
                     const handler = (e) => {
                         e.preventDefault();
                         window.deferredPrompt = e;
@@ -341,7 +320,7 @@
                     return (
                         <button 
                             onClick={handleInstall}
-                            className="w-full bg-green-600 text-white p-3 rounded-lg shadow-md hover:bg-green-700 transition-all text-center touch-target mb-4 install-pulse"
+                            className="w-full bg-green-600 text-white p-3 rounded-lg shadow-md hover:bg-green-700 transition-all text-center touch-target mb-4"
                         >
                             📲 Instalar App para Pantalla Completa
                         </button>
@@ -351,13 +330,37 @@
                 return null;
             };
 
-            // --- Demo mode implementation for when Firebase is not available ---
+            // --- 演示模式实现（带本地存储）---
             const initializeAppInDemoMode = () => {
-                console.log("Inicializando en modo demo");
+                console.log("Inicializando en modo demo con almacenamiento local");
                 
-                const mockServerTimestamp = () => ({ toDate: () => new Date() });
-                const mockDoc = (path, id) => ({ id, path });
-                const mockCollection = (path) => path;
+                // 从本地存储加载数据
+                const loadFromLocalStorage = (key) => {
+                    try {
+                        const data = localStorage.getItem(`demo_${key}`);
+                        return data ? JSON.parse(data) : [];
+                    } catch (error) {
+                        console.error("Error loading from localStorage:", error);
+                        return [];
+                    }
+                };
+                
+                // 保存数据到本地存储
+                const saveToLocalStorage = (key, data) => {
+                    try {
+                        localStorage.setItem(`demo_${key}`, JSON.stringify(data));
+                    } catch (error) {
+                        console.error("Error saving to localStorage:", error);
+                    }
+                };
+                
+                let demoData = {
+                    cashier_records: loadFromLocalStorage('cashier_records'),
+                    actual_collections: loadFromLocalStorage('actual_collections'),
+                    reconciliation_reports: loadFromLocalStorage('reconciliation_reports')
+                };
+                
+                let listeners = {};
                 
                 window.firebaseSDK = {
                     initializeApp: () => ({}),
@@ -369,24 +372,98 @@
                         return () => {};
                     },
                     getFirestore: () => ({}),
-                    doc: mockDoc,
-                    setDoc: () => Promise.resolve(),
-                    collection: mockCollection,
-                    onSnapshot: (collectionRef, onNext, onError) => {
-                        onNext({ docs: [] });
-                        return () => {};
+                    doc: (path, id) => ({ id, path }),
+                    setDoc: (docRef, data) => {
+                        const path = docRef.path;
+                        if (path.includes('cashier_records')) {
+                            const existingIndex = demoData.cashier_records.findIndex(item => item.id === docRef.id);
+                            if (existingIndex >= 0) {
+                                demoData.cashier_records[existingIndex] = { id: docRef.id, ...data };
+                            } else {
+                                demoData.cashier_records.push({ id: docRef.id, ...data });
+                            }
+                            saveToLocalStorage('cashier_records', demoData.cashier_records);
+                        } else if (path.includes('actual_collections')) {
+                            const existingIndex = demoData.actual_collections.findIndex(item => item.id === docRef.id);
+                            if (existingIndex >= 0) {
+                                demoData.actual_collections[existingIndex] = { id: docRef.id, ...data };
+                            } else {
+                                demoData.actual_collections.push({ id: docRef.id, ...data });
+                            }
+                            saveToLocalStorage('actual_collections', demoData.actual_collections);
+                        } else if (path.includes('reconciliation_reports')) {
+                            const existingIndex = demoData.reconciliation_reports.findIndex(item => item.id === docRef.id);
+                            if (existingIndex >= 0) {
+                                demoData.reconciliation_reports[existingIndex] = { id: docRef.id, ...data };
+                            } else {
+                                demoData.reconciliation_reports.push({ id: docRef.id, ...data });
+                            }
+                            saveToLocalStorage('reconciliation_reports', demoData.reconciliation_reports);
+                        }
+                        
+                        // 触发监听器
+                        if (listeners[path]) {
+                            listeners[path].forEach(callback => {
+                                callback({ docs: demoData[path.split('/').pop()].map(item => ({ id: item.id, data: () => item })) });
+                            });
+                        }
+                        
+                        return Promise.resolve();
                     },
-                    serverTimestamp: mockServerTimestamp,
-                    getDoc: () => Promise.resolve({ exists: () => false }),
-                    deleteDoc: () => Promise.resolve()
+                    collection: (path) => path,
+                    onSnapshot: (collectionRef, onNext, onError) => {
+                        const collectionName = collectionRef.split('/').pop();
+                        if (!listeners[collectionName]) {
+                            listeners[collectionName] = [];
+                        }
+                        listeners[collectionName].push(onNext);
+                        
+                        // 立即发送当前数据
+                        setTimeout(() => {
+                            onNext({ docs: (demoData[collectionName] || []).map(item => ({ id: item.id, data: () => item })) });
+                        }, 0);
+                        
+                        return () => {
+                            if (listeners[collectionName]) {
+                                const index = listeners[collectionName].indexOf(onNext);
+                                if (index > -1) {
+                                    listeners[collectionName].splice(index, 1);
+                                }
+                            }
+                        };
+                    },
+                    serverTimestamp: () => ({ toDate: () => new Date() }),
+                    getDoc: (docRef) => {
+                        const path = docRef.path;
+                        const collectionName = path.split('/').pop().split('/')[0];
+                        const docId = path.split('/').pop();
+                        
+                        const docData = (demoData[collectionName] || []).find(item => item.id === docId);
+                        return Promise.resolve({ 
+                            exists: () => !!docData,
+                            data: () => docData
+                        });
+                    },
+                    deleteDoc: (docRef) => {
+                        const path = docRef.path;
+                        const collectionName = path.split('/').pop().split('/')[0];
+                        const docId = path.split('/').pop();
+                        
+                        if (demoData[collectionName]) {
+                            demoData[collectionName] = demoData[collectionName].filter(item => item.id !== docId);
+                            saveToLocalStorage(collectionName, demoData[collectionName]);
+                        }
+                        
+                        return Promise.resolve();
+                    }
                 };
                 
                 initializeReactApp();
             };
 
-            // --- Main App Component ---
+            // --- 主应用组件 ---
             const App = () => {
-                // State Management
+                // 状态管理
                 const [currentPage, setCurrentPage] = useState(PAGE.HOME);
                 const [isLoading, setIsLoading] = useState(true);
                 const [loadingMessage, setLoadingMessage] = useState("Inicializando...");
@@ -395,33 +472,27 @@
                 const [isAuthReady, setIsAuthReady] = useState(false);
                 const [isStandalone, setIsStandalone] = useState(false);
                 
-                // Data from Firestore
+                // 使用 useRef 来避免不必要的重新渲染
+                const dataListeners = useRef({ cashier: null, actual: null, reports: null });
+                
+                // 数据状态
                 const [cashierRecords, setCashierRecords] = useState([]);
                 const [actualCollections, setActualCollections] = useState([]);
                 const [reconciliationReports, setReconciliationReports] = useState([]);
 
-                // Form State
+                // 表单状态 - 使用独立状态管理避免闪动
                 const [inputDate, setInputDate] = useState(new Date().toISOString().slice(0, 10));
                 const [inputCaja, setInputCaja] = useState('');
                 const [inputShift, setInputShift] = useState('1');
                 const [inputDetails, setInputDetails] = useState(Object.keys(PAYMENT_METHODS).reduce((acc, key) => ({ ...acc, [key]: '' }), {}));
                 const [formType, setFormType] = useState('expected');
                 
-                // Check if app is running in standalone mode
+                // 检查是否在全屏模式
                 useEffect(() => {
-                    const checkDisplayMode = () => {
-                        setIsStandalone(window.matchMedia('(display-mode: standalone)').matches);
-                    };
-                    
-                    checkDisplayMode();
-                    window.matchMedia('(display-mode: standalone)').addEventListener('change', checkDisplayMode);
-                    
-                    return () => {
-                        window.matchMedia('(display-mode: standalone)').removeEventListener('change', checkDisplayMode);
-                    };
+                    setIsStandalone(window.matchMedia('(display-mode: standalone)').matches);
                 }, []);
 
-                // --- Firebase Auth & Data Listeners ---
+                // --- Firebase 认证 ---
                 useEffect(() => {
                     if (!app) {
                         console.warn("Firebase no está configurado - usando modo demo");
@@ -458,6 +529,7 @@
                     return `/artifacts/${appId}/users/${userId}/${collectionName}`;
                 }, [userId, db]);
 
+                // --- 优化的数据监听（避免闪动）---
                 useEffect(() => {
                     if (!isAuthReady || !db || !userId) return;
                     
@@ -469,21 +541,25 @@
                     const reportPath = getCollectionPath('reconciliation_reports');
 
                     try {
-                        const unsubCashier = onSnapshot(collection(db, cashierPath), (snap) => {
+                        // 清理旧的监听器
+                        if (dataListeners.current.cashier) dataListeners.current.cashier();
+                        if (dataListeners.current.actual) dataListeners.current.actual();
+                        if (dataListeners.current.reports) dataListeners.current.reports();
+                        
+                        // 设置新的监听器
+                        dataListeners.current.cashier = onSnapshot(collection(db, cashierPath), (snap) => {
                             setCashierRecords(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                         }, (error) => {
                             console.error("Error loading cashier records:", error);
-                            setIsLoading(false);
                         });
                         
-                        const unsubActual = onSnapshot(collection(db, actualPath), (snap) => {
+                        dataListeners.current.actual = onSnapshot(collection(db, actualPath), (snap) => {
                             setActualCollections(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                         }, (error) => {
                             console.error("Error loading actual collections:", error);
-                            setIsLoading(false);
                         });
                         
-                        const unsubReports = onSnapshot(collection(db, reportPath), (snap) => {
+                        dataListeners.current.reports = onSnapshot(collection(db, reportPath), (snap) => {
                             setReconciliationReports(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                             setIsLoading(false);
                         }, (error) => {
@@ -491,18 +567,20 @@
                             setIsLoading(false);
                         });
 
-                        return () => { 
-                            if (unsubCashier) unsubCashier(); 
-                            if (unsubActual) unsubActual(); 
-                            if (unsubReports) unsubReports(); 
-                        };
                     } catch (error) {
                         console.error("Error setting up listeners:", error);
                         setIsLoading(false);
                     }
+                    
+                    return () => {
+                        // 清理监听器
+                        if (dataListeners.current.cashier) dataListeners.current.cashier();
+                        if (dataListeners.current.actual) dataListeners.current.actual();
+                        if (dataListeners.current.reports) dataListeners.current.reports();
+                    };
                 }, [isAuthReady, db, userId, getCollectionPath]);
 
-                // --- Reconciliation Logic ---
+                // --- 对账逻辑 ---
                 const reconcileRecords = useCallback(async (date) => {
                     if (!db || !userId) return;
                     
@@ -549,13 +627,13 @@
                 }, [cashierRecords, actualCollections, db, userId, getCollectionPath]);
                 
                 useEffect(() => {
-                    if (isAuthReady) {
+                    if (isAuthReady && (cashierRecords.length > 0 || actualCollections.length > 0)) {
                         const allDates = new Set([...cashierRecords.map(r => r.date), ...actualCollections.map(r => r.date)]);
                         allDates.forEach(date => reconcileRecords(date));
                     }
                 }, [cashierRecords, actualCollections, isAuthReady, reconcileRecords]);
                 
-                // --- Form Handling & Data Loading ---
+                // --- 表单处理和数据处理 ---
                 const loadExistingRecord = useCallback(async () => {
                     if (!db || !userId || !inputDate || !inputCaja || !inputShift) return;
                     const collectionName = formType === 'expected' ? 'cashier_records' : 'actual_collections';
@@ -578,9 +656,13 @@
                     }
                 }, [db, userId, inputDate, inputCaja, inputShift, formType, getCollectionPath]);
 
+                // 使用防抖加载现有记录
                 useEffect(() => { 
-                    loadExistingRecord(); 
-                }, [loadExistingRecord]);
+                    const timer = setTimeout(() => {
+                        loadExistingRecord();
+                    }, 300);
+                    return () => clearTimeout(timer);
+                }, [inputDate, inputCaja, inputShift, formType]);
                 
                 const resetForm = useCallback(() => {
                     setInputCaja(''); 
@@ -684,14 +766,6 @@
                         return;
                     }
                     
-                    if (!db) {
-                        setModal({ 
-                            title: "Modo Demo", 
-                            message: "Los datos no se guardarán permanentemente en modo demo. Para guardar datos, configure Firebase." 
-                        });
-                        return;
-                    }
-                    
                     setLoadingMessage("Guardando...");
                     setIsLoading(true);
                     const key = `${inputDate}_${inputCaja}_${inputShift}`;
@@ -720,16 +794,30 @@
                     }
                 };
                 
+                // 优化的输入处理函数 - 避免闪动
+                const handleInputChange = useCallback((key, value) => {
+                    setInputDetails(prev => ({
+                        ...prev,
+                        [key]: value
+                    }));
+                }, []);
+                
                 const HomePage = () => (
                     <Page>
                         <Header title="Conciliación de Caja" />
                         <main className="p-4 space-y-3">
-                            {/* PWA Install Button */}
                             <PWAInstallButton />
                             
                             {isStandalone && (
                                 <div className="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded mb-4 text-center">
                                     🚀 Ejecutándose en modo aplicación
+                                </div>
+                            )}
+                            
+                            {!db && (
+                                <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4">
+                                    <p className="font-semibold">⚠️ Modo Demo Activado</p>
+                                    <p className="text-sm">Los datos se guardan localmente. Configure Firebase para guardar datos permanentemente.</p>
                                 </div>
                             )}
                             
@@ -776,14 +864,43 @@
                     const title = type === 'expected' ? "Registrar Monto del Sistema (Esperado)" : "Registrar Monto Real (Recaudado)";
                     const isEditing = inputCaja !== '';
                     
+                    // 使用本地状态避免全局状态更新导致的闪动
+                    const [localInputDetails, setLocalInputDetails] = useState(inputDetails);
+                    
+                    // 同步全局状态到本地状态
                     useEffect(() => {
-                        loadExistingRecord();
-                    }, [inputDate, inputCaja, inputShift, type]);
+                        setLocalInputDetails(inputDetails);
+                    }, [inputDetails]);
+                    
+                    // 处理本地输入变化
+                    const handleLocalInputChange = (key, value) => {
+                        const newDetails = {
+                            ...localInputDetails,
+                            [key]: value
+                        };
+                        setLocalInputDetails(newDetails);
+                        // 延迟更新全局状态，避免频繁重渲染
+                        setTimeout(() => setInputDetails(newDetails), 100);
+                    };
+                    
+                    // 提交时使用本地状态
+                    const handleLocalSubmit = async (e) => {
+                        e.preventDefault();
+                        // 确保使用最新的本地状态
+                        const submitData = {
+                            ...localInputDetails
+                        };
+                        setInputDetails(submitData);
+                        
+                        // 调用原有的提交逻辑
+                        const event = { ...e };
+                        setTimeout(() => handleFormSubmit(event), 0);
+                    };
 
                     return (
                         <Page>
                             <Header title={title} onBack={onBack} />
-                            <form onSubmit={handleFormSubmit} className="p-4 space-y-4">
+                            <form onSubmit={handleLocalSubmit} className="p-4 space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="text-sm font-medium block mb-1">Fecha:</label>
@@ -828,8 +945,8 @@
                                         <input 
                                             type="number" 
                                             step="0.01" 
-                                            value={inputDetails[key]} 
-                                            onChange={(e) => setInputDetails(prev => ({ ...prev, [key]: e.target.value }))} 
+                                            value={localInputDetails[key]} 
+                                            onChange={(e) => handleLocalInputChange(key, e.target.value)} 
                                             className="w-full p-2 border rounded-md touch-target" 
                                             placeholder="0.00" 
                                         />
@@ -1040,7 +1157,7 @@
                         {isLoading && <Loader message={loadingMessage} />}
                         {modal && <CustomModal title={modal.title} message={modal.message} onClose={modal.onClose || (() => setModal(null))} onConfirm={modal.onConfirm} confirmText={modal.confirmText} />}
                         {isAuthReady ? renderContent() : <Loader message="Conectando servicios de seguridad..." />}
-                        <footer className="text-xs text-gray-400 p-2 text-center bg-gray-100 border-t fixed bottom-0 w-full max-w-md mx-auto safe-area-bottom">
+                        <footer className="text-xs text-gray-400 p-2 text-center bg-gray-100 border-t">
                             User ID: {userId || 'Authenticating...'} {!db && '(Demo Mode)'} {isStandalone && '| 🚀 App'}
                         </footer>
                     </div>
