@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Conciliación de Caja</title>
+
+    <!-- PWA Manifest for "Add to Home Screen" -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1f2937"/>
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        /* Prevents pull-to-refresh, common in PWAs */
+        body { overscroll-behavior-y: contain; }
+        .page-enter { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <!-- FIX: Step 1 - Load Firebase SDK in a separate module script -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, onSnapshot, serverTimestamp, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // Expose Firebase functions to the global scope for the Babel script
+        window.firebaseSDK = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            getFirestore,
+            doc,
+            setDoc,
+            collection,
+            onSnapshot,
+            serverTimestamp,
+            getDoc,
+            deleteDoc // Added for deletion functionality
+        };
+    </script>
+
+    <script type="text/babel">
+        // FIX: Step 2 - Consume Firebase SDK from the window object instead of importing directly
+        const { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, doc, setDoc, collection, onSnapshot, serverTimestamp, getDoc, deleteDoc
+        } = window.firebaseSDK;
+
+        const { useState, useEffect, useCallback, StrictMode } = React;
+
+        // --- Firebase Initialization ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } else {
+            console.warn("Firebase no está configurado.");
+        }
+        
+        // --- App Constants (Spanish Translation) ---
+        const PAYMENT_METHODS = {
+            'tarjeta': 'Tarjeta Bancaria', 
+            'divisa': 'Divisa/Dólar',
+            'pago_movil': 'Pago Móvil', 
+            'biopago': 'Biopago',
+            'efectivo': 'Efectivo', 
+            'transferencia': 'Transferencia', 
+            'bpa': 'B.PA (Banco)'
+        };
+        // Added MANAGE_DATA page
+        const PAGE = { HOME: 'HOME', SYSTEM_INPUT: 'SYSTEM_INPUT', ACTUAL_INPUT: 'ACTUAL_INPUT', REPORTS: 'REPORTS', ALL_DATA: 'ALL_DATA', HTML_REPORT: 'HTML_REPORT', MANAGE_DATA: 'MANAGE_DATA' };
+        
+        const getShiftName = (shiftCode) => (shiftCode === '1' ? "Mañana" : (shiftCode === '2' ? "Tarde" : "Desconocido"));
+
+        // --- Reusable UI Components (Spanish Translation) ---
+        const Page = ({ children }) => <div className="page-enter">{children}</div>;
+        
+        const Header = ({ title, onBack }) => (
+            <header className="bg-gray-800 text-white p-4 text-center sticky top-0 z-10 shadow-md flex items-center justify-center">
+                {onBack && (
+                    <button onClick={onBack} className="absolute left-4 text-2xl font-bold text-white">&larr;</button>
+                )}
+                <h1 className="text-lg font-semibold">{title}</h1>
+            </header>
+        );
+        
+        const MainMenuButton = ({ title, subtitle, onClick }) => (
+            <button onClick={onClick} className="w-full bg-white p-4 rounded-lg shadow-md hover:bg-gray-50 active:bg-gray-100 transition-all text-left border">
+                <h2 className="font-bold text-gray-800 text-base">{title}</h2>
+                <p className="text-sm text-gray-500">{subtitle}</p>
+            </button>
+        );
+        
+        // Modified CustomModal to handle confirmation flow for deletion
+        const CustomModal = ({ title, message, onClose, onConfirm, confirmText = 'Confirmar' }) => (
+            <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center transform transition-all scale-100 opacity-100">
+                    <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>
+                    <p className="text-gray-600 mb-4">{message}</p>
+                    <div className="flex justify-center space-x-4">
+                        {onConfirm && (
+                            <button onClick={onClose} className="bg-gray-400 text-white px-6 py-2 rounded-lg hover:bg-gray-500 focus:outline-none">
+                                Cancelar
+                            </button>
+                        )}
+                        <button 
+                            onClick={onConfirm || onClose} 
+                            className={`px-6 py-2 rounded-lg text-white font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 ${onConfirm ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'}`}>
+                            {onConfirm ? confirmText : 'Aceptar'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Loader = ({ message }) => (
+             <div className="fixed inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center z-50">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+                <p className="text-white mt-4">{message}</p>
+            </div>
+        );
+
+        // --- Main App Component ---
+        const App = () => {
+            // State Management
+            const [currentPage, setCurrentPage] = useState(PAGE.HOME);
+            const [isLoading, setIsLoading] = useState(true);
+            const [loadingMessage, setLoadingMessage] = useState("Inicializando...");
+            const [modal, setModal] = useState(null); 
+            const [userId, setUserId] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            
+            // Data from Firestore
+            const [cashierRecords, setCashierRecords] = useState([]);
+            const [actualCollections, setActualCollections] = useState([]);
+            const [reconciliationReports, setReconciliationReports] = useState([]);
+
+            // Form State
+            const [inputDate, setInputDate] = useState(new Date().toISOString().slice(0, 10));
+            const [inputCaja, setInputCaja] = useState('');
+            const [inputShift, setInputShift] = useState('1');
+            const [inputDetails, setInputDetails] = useState(Object.keys(PAYMENT_METHODS).reduce((acc, key) => ({ ...acc, [key]: '' }), {}));
+            const [formType, setFormType] = useState('expected');
+            
+            // --- Firebase Auth & Data Listeners ---
+            useEffect(() => {
+                if (!app) {
+                    console.error("Firebase no está configurado.");
+                    setIsLoading(false);
+                    return;
+                }
+                const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+                    setUserId(user ? user.uid : `anonymous_${crypto.randomUUID()}`);
+                    setIsAuthReady(true);
+                });
+                if (!auth.currentUser) {
+                    (async () => {
+                        try {
+                            if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
+                            else await signInAnonymously(auth);
+                        } catch (error) { console.error("Error de autenticación:", error); }
+                    })();
+                }
+                return () => unsubscribeAuth();
+            }, []);
+
+            const getCollectionPath = useCallback((collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}`, [userId]);
+
+            useEffect(() => {
+                if (!isAuthReady || !db || !userId) return;
+                setIsLoading(true);
+                setLoadingMessage("Cargando datos...");
+                
+                const cashierPath = getCollectionPath('cashier_records');
+                const actualPath = getCollectionPath('actual_collections');
+                const reportPath = getCollectionPath('reconciliation_reports');
+
+                const unsubCashier = onSnapshot(collection(db, cashierPath), (snap) => {
+                    setCashierRecords(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                }, (error) => console.error("Error loading cashier records:", error));
+                
+                const unsubActual = onSnapshot(collection(db, actualPath), (snap) => {
+                    setActualCollections(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                }, (error) => console.error("Error loading actual collections:", error));
+                
+                const unsubReports = onSnapshot(collection(db, reportPath), (snap) => {
+                    setReconciliationReports(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    setIsLoading(false);
+                }, (error) => console.error("Error loading reports:", error));
+
+                return () => { unsubCashier(); unsubActual(); unsubReports(); };
+            }, [isAuthReady, db, userId, getCollectionPath]);
+
+            // --- Reconciliation Logic ---
+            const reconcileRecords = useCallback(async (date) => {
+                if (!db || !userId) return;
+                const expected = cashierRecords.filter(r => r.date === date);
+                const actual = actualCollections.filter(r => r.date === date);
+                
+                // Group by key (caja_shift)
+                const expByKey = Object.fromEntries(expected.map(r => [`${r.caja}_${r.shift}`, r]));
+                const actByKey = Object.fromEntries(actual.map(r => [`${r.caja}_${r.shift}`, r]));
+                
+                const allKeys = new Set([...Object.keys(expByKey), ...Object.keys(actByKey)]);
+                
+                const reportDetails = Array.from(allKeys).map(key => {
+                    const [caja, shift] = key.split('_');
+                    const exp = expByKey[key] || { total_amount: 0, details: {} };
+                    const act = actByKey[key] || { total_amount: 0, details: {} };
+                    const diff = exp.total_amount - act.total_amount;
+                    const status = Math.abs(diff) < 0.005 ? "Conciliado (Equilibrado)" : "Con Discrepancia (Desequilibrado)";
+                    
+                    return { date, caja, shift, expected: exp.total_amount, actual: act.total_amount, difference: diff, status, expected_details: exp.details, actual_details: act.details };
+                });
+                
+                const reportRef = doc(db, getCollectionPath('reconciliation_reports'), date);
+                await setDoc(reportRef, { date, timestamp: serverTimestamp(), details: reportDetails }, { merge: true });
+            }, [cashierRecords, actualCollections, db, userId, getCollectionPath]);
+            
+            useEffect(() => {
+                if (isAuthReady) {
+                    // Only reconcile if there are any records at all
+                    const allDates = new Set([...cashierRecords.map(r => r.date), ...actualCollections.map(r => r.date)]);
+                    allDates.forEach(date => reconcileRecords(date));
+                }
+            }, [cashierRecords, actualCollections, isAuthReady, reconcileRecords]);
+            
+            // --- Form Handling & Data Loading ---
+            const loadExistingRecord = useCallback(async () => {
+                if (!db || !userId || !inputDate || !inputCaja || !inputShift) return;
+                const collectionName = formType === 'expected' ? 'cashier_records' : 'actual_collections';
+                const key = `${inputDate}_${inputCaja}_${inputShift}`;
+                const docRef = doc(db, getCollectionPath(collectionName), key);
+                try {
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        const existingDetails = Object.keys(PAYMENT_METHODS).reduce((acc, k) => {
+                            acc[k] = data.details[k] !== undefined ? String(data.details[k]) : '';
+                            return acc;
+                        }, {});
+                        setInputDetails(existingDetails);
+                    } else {
+                        setInputDetails(Object.keys(PAYMENT_METHODS).reduce((acc, k) => ({ ...acc, [k]: '' }), {}));
+                    }
+                } catch (error) { console.error("Error cargando registro existente:", error); }
+            }, [db, userId, inputDate, inputCaja, inputShift, formType, getCollectionPath]);
+
+            useEffect(() => { loadExistingRecord(); }, [loadExistingRecord]);
+            
+            // Helper function to reset form state
+            const resetForm = useCallback(() => {
+                setInputCaja(''); 
+                setInputShift('1');
+                setInputDetails(Object.keys(PAYMENT_METHODS).reduce((acc, key) => ({ ...acc, [key]: '' }), {}));
+                setInputDate(new Date().toISOString().slice(0, 10)); // Reset date to today
+            }, []);
+
+            // --- Edit/Delete Logic ---
+            const handleEditRecord = useCallback((record, type) => {
+                setInputDate(record.date);
+                setInputCaja(String(record.caja));
+                setInputShift(record.shift);
+                
+                // Convert details back to string format for input fields
+                const detailsToEdit = Object.keys(PAYMENT_METHODS).reduce((acc, k) => {
+                    acc[k] = record.details[k] !== undefined ? String(record.details[k]) : '';
+                    return acc;
+                }, {});
+                setInputDetails(detailsToEdit);
+                
+                navigate(type === 'expected' ? PAGE.SYSTEM_INPUT : PAGE.ACTUAL_INPUT, type);
+            }, [navigate]);
+
+            const handleDeleteRecord = async (record, type) => {
+                if (!db || !userId) return;
+
+                const collectionPath = getCollectionPath(type === 'expected' ? 'cashier_records' : 'actual_collections');
+                const key = `${record.date}_${record.caja}_${record.shift}`;
+                
+                setModal({
+                    title: "Confirmar Eliminación",
+                    message: `¿Está seguro que desea eliminar el registro del ${record.date} (Caja: ${record.caja}, Turno: ${getShiftName(record.shift)})? Esta acción no se puede deshacer.`,
+                    onClose: () => setModal(null),
+                    onConfirm: async () => {
+                        setModal(null);
+                        setLoadingMessage("Eliminando registro...");
+                        setIsLoading(true);
+                        try {
+                            await deleteDoc(doc(db, collectionPath, key));
+                            await reconcileRecords(record.date);
+                            setLoadingMessage("Registro eliminado.");
+                            setIsLoading(false);
+                            setModal({ title: "Éxito", message: "Registro eliminado y reportes actualizados." });
+                        } catch (error) {
+                            setIsLoading(false);
+                            setModal({ title: "Error", message: `Fallo al eliminar: ${error.message}` });
+                        }
+                    },
+                    confirmText: 'Sí, Eliminar'
+                });
+            };
+
+            // --- Report Generation (Browser-based) ---
+            const downloadFile = (data, filename, mimeType) => {
+                const blob = new Blob([data], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const generateCsvReport = () => {
+                if (reconciliationReports.length === 0) {
+                    setModal({ title: "Sin Datos", message: "No hay datos de reportes disponibles para exportar." });
+                    return;
+                }
+                const headers = ['Fecha', 'Caja', 'Turno', 'Estado', 'Total Esperado', 'Total Real', 'Diferencia', ...Object.values(PAYMENT_METHODS).flatMap(name => [`${name} - Esperado`, `${name} - Real`, `${name} - Diferencia`])];
+                let csvContent = headers.map(h => `"${h}"`).join(',') + '\n';
+                reconciliationReports.forEach(report => {
+                    report.details.forEach(detail => {
+                        const row = [`"${detail.date}"`, detail.caja, `"${getShiftName(detail.shift)}"`, `"${detail.status.split(' ')[0]}"`, detail.expected.toFixed(2), detail.actual.toFixed(2), detail.difference.toFixed(2)];
+                        Object.keys(PAYMENT_METHODS).forEach(key => {
+                            const exp = parseFloat(detail.expected_details[key] || 0);
+                            const act = parseFloat(detail.actual_details[key] || 0);
+                            row.push(exp.toFixed(2), act.toFixed(2), (exp - act).toFixed(2));
+                        });
+                        csvContent += row.join(',') + '\n';
+                    });
+                });
+                downloadFile(csvContent, `reporte_conciliacion_${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;');
+                setModal({ title: "Éxito", message: "El reporte CSV está listo y la descarga comenzará pronto." });
+            };
+            
+            // --- Form Submission Logic ---
+            const handleFormSubmit = async (e) => {
+                e.preventDefault();
+                if (!inputCaja) {
+                    setModal({ title: "Error", message: "El campo 'Caja' es obligatorio." });
+                    return;
+                }
+                setLoadingMessage("Guardando...");
+                setIsLoading(true);
+                const key = `${inputDate}_${inputCaja}_${inputShift}`;
+                const total_amount = Object.values(inputDetails).reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+                const data = {
+                    date: inputDate, caja: inputCaja, shift: inputShift,
+                    details: Object.entries(inputDetails).reduce((acc, [k, v]) => ({...acc, [k]: parseFloat(v) || 0}), {}),
+                    total_amount, timestamp: serverTimestamp(),
+                };
+                const collectionPath = getCollectionPath(formType === 'expected' ? 'cashier_records' : 'actual_collections');
+                try {
+                    await setDoc(doc(db, collectionPath, key), data, { merge: true });
+                    await reconcileRecords(inputDate);
+                    setIsLoading(false);
+                    setModal({ title: "Éxito", message: "Registro guardado/actualizado exitosamente.", onClose: () => { resetForm(); setCurrentPage(PAGE.HOME); } });
+                } catch (error) {
+                    setIsLoading(false);
+                    setModal({ title: "Error", message: `Fallo al guardar: ${error.message}` });
+                }
+            };
+            
+            // --- Navigation and Page Rendering ---
+            const navigate = (page, type = 'expected') => {
+                setFormType(type);
+                setCurrentPage(page);
+            };
+
+            const renderContent = () => {
+                switch (currentPage) {
+                    case PAGE.SYSTEM_INPUT: return <InputPage type="expected" onBack={() => { resetForm(); setCurrentPage(PAGE.HOME); }} />;
+                    case PAGE.ACTUAL_INPUT: return <InputPage type="actual" onBack={() => { resetForm(); setCurrentPage(PAGE.HOME); }} />;
+                    case PAGE.REPORTS: return <ReportsPage />;
+                    case PAGE.ALL_DATA: return <AllDataPage />;
+                    case PAGE.HTML_REPORT: return <HtmlReportPage />;
+                    case PAGE.MANAGE_DATA: return <ManageDataPage />;
+                    default: return <HomePage />;
+                }
+            };
+
+            // --- Page Components ---
+            const HomePage = () => (
+                <Page>
+                    <Header title="Conciliación de Caja" />
+                    <main className="p-4 space-y-3">
+                        <MainMenuButton title="1. Registrar Monto del Sistema (Esperado)" subtitle="Monto teórico del sistema al cierre" onClick={() => navigate(PAGE.SYSTEM_INPUT, 'expected')} />
+                        <MainMenuButton title="2. Registrar Monto Real (Recaudado)" subtitle="Monto recaudado por conteo físico" onClick={() => navigate(PAGE.ACTUAL_INPUT, 'actual')} />
+                        <MainMenuButton title="3. Ver Reportes de Conciliación" subtitle="Revisar las diferencias por turno/caja" onClick={() => navigate(PAGE.REPORTS)} />
+                        <MainMenuButton title="4. Ver Datos Crudos" subtitle="Explorar todos los registros guardados" onClick={() => navigate(PAGE.ALL_DATA)} />
+                        <MainMenuButton title="5. Generar Reporte Web" subtitle="Ver el reporte detallado en formato web" onClick={() => navigate(PAGE.HTML_REPORT)} />
+                        <MainMenuButton title="6. Administrar Datos (Editar/Eliminar)" subtitle="Modificar o eliminar registros existentes" onClick={() => navigate(PAGE.MANAGE_DATA)} />
+                        <MainMenuButton title="7. Descargar Reporte CSV" subtitle="Exportar todos los datos del reporte a CSV" onClick={generateCsvReport} />
+                    </main>
+                </Page>
+            );
+
+            const InputPage = ({ type, onBack }) => {
+                const title = type === 'expected' ? "Registrar Monto del Sistema (Esperado)" : "Registrar Monto Real (Recaudado)";
+                const isEditing = inputCaja !== '';
+                
+                useEffect(() => {
+                    // This reloads existing data when key inputs change (Date, Caja, Shift)
+                    loadExistingRecord();
+                }, [inputDate, inputCaja, inputShift, type]);
+
+                return (
+                    <Page>
+                        <Header title={title} onBack={onBack} />
+                        <form onSubmit={handleFormSubmit} className="p-4 space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm font-medium block mb-1">Fecha:</label>
+                                    <input type="date" value={inputDate} onChange={(e) => setInputDate(e.target.value)} className="w-full p-2 border rounded-md" required />
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium block mb-1">Caja (Ej. 1):</label>
+                                    <input type="number" value={inputCaja} onChange={(e) => setInputCaja(e.target.value)} className="w-full p-2 border rounded-md" placeholder="Ej: 1" required />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium block mb-1">Turno:</label>
+                                <select value={inputShift} onChange={(e) => setInputShift(e.target.value)} className="w-full p-2 border rounded-md">
+                                    <option value="1">1 - Mañana</option>
+                                    <option value="2">2 - Tarde</option>
+                                </select>
+                            </div>
+                             <div className={`p-2 text-sm rounded-md text-center font-medium ${isEditing ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                                {isEditing ? '⚠️ Editando registro existente' : '✅ Ingresando nuevo registro'}
+                            </div>
+                            <h3 className="text-base font-semibold pt-4 border-t">Ingresar Montos por Método de Pago:</h3>
+                            {Object.entries(PAYMENT_METHODS).map(([key, name]) => (
+                                <div key={key}>
+                                    <label className="text-sm font-medium block mb-1">{name}:</label>
+                                    <input type="number" step="0.01" value={inputDetails[key]} onChange={(e) => setInputDetails(prev => ({ ...prev, [key]: e.target.value }))} className="w-full p-2 border rounded-md" placeholder="0.00" />
+                                </div>
+                            ))}
+                            <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg transition duration-150 mt-4">
+                                Guardar/Actualizar Montos
+                            </button>
+                        </form>
+                    </Page>
+                );
+            };
+
+            const ReportsPage = () => (
+                <Page>
+                    <Header title="Reportes de Conciliación" onBack={() => setCurrentPage(PAGE.HOME)} />
+                    <div className="p-4 space-y-4">
+                        {[...reconciliationReports].sort((a,b) => b.date.localeCompare(a.date)).map(report => (
+                            <div key={report.id} className="bg-white p-3 rounded-lg shadow border">
+                                <h3 className="font-bold text-gray-800 border-b pb-2 mb-2">Fecha: {report.date}</h3>
+                                {report.details.map((detail, index) => (
+                                    <div key={index} className="mt-2 pt-2 border-t border-gray-200 first:border-t-0">
+                                        <p><b>Caja:</b> {detail.caja} | <b>Turno:</b> {getShiftName(detail.shift)}</p>
+                                        <p><b>Monto Esperado:</b> {detail.expected.toFixed(2)} | <b>Monto Real:</b> {detail.actual.toFixed(2)}</p>
+                                        <p className={`font-bold ${detail.status.includes('Discrepancia') ? 'text-red-600' : 'text-green-600'}`}>
+                                            Diferencia: {detail.difference.toFixed(2)} ({detail.status})
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        ))}
+                        {reconciliationReports.length === 0 && <p className="text-center text-gray-500 mt-8">No hay reportes disponibles.</p>}
+                    </div>
+                </Page>
+            );
+            
+            const ManageDataPage = () => {
+                const [activeTab, setActiveTab] = useState('expected'); // 'expected' or 'actual'
+                const data = activeTab === 'expected' ? cashierRecords : actualCollections;
+                const title = activeTab === 'expected' ? 'Sistema (Esperado)' : 'Real (Recaudado)';
+                const type = activeTab === 'expected' ? 'expected' : 'actual';
+
+                const sortedData = [...data].sort((a,b) => b.id.localeCompare(a.id));
+
+                return (
+                    <Page>
+                        <Header title="Administrar Datos" onBack={() => setCurrentPage(PAGE.HOME)} />
+                        <div className="p-4">
+                            <div className="flex space-x-2 mb-4">
+                                <button 
+                                    onClick={() => setActiveTab('expected')} 
+                                    className={`flex-1 py-2 rounded-lg font-semibold transition ${activeTab === 'expected' ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-gray-800 border'}`}>
+                                    Esperado (Sistema)
+                                </button>
+                                <button 
+                                    onClick={() => setActiveTab('actual')} 
+                                    className={`flex-1 py-2 rounded-lg font-semibold transition ${activeTab === 'actual' ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-gray-800 border'}`}>
+                                    Real (Recaudado)
+                                </button>
+                            </div>
+
+                            <h2 className="text-lg font-bold mb-3">{title} - {sortedData.length} Registros</h2>
+
+                            <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+                                {sortedData.map(record => (
+                                    <div key={record.id} className="bg-white p-3 rounded-lg shadow border flex flex-col sm:flex-row justify-between items-start sm:items-center">
+                                        <div className="flex-1 min-w-0 mb-2 sm:mb-0">
+                                            <p className="font-bold text-gray-800">Fecha: {record.date}</p>
+                                            <p className="text-sm text-gray-600">Caja: {record.caja}, Turno: {getShiftName(record.shift)}</p>
+                                            <p className="text-md font-semibold text-indigo-600">Total: {record.total_amount.toFixed(2)}</p>
+                                        </div>
+                                        <div className="flex space-x-2 text-sm">
+                                            <button 
+                                                onClick={() => handleEditRecord(record, type)} 
+                                                className="bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600">
+                                                Editar
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteRecord(record, type)} 
+                                                className="bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600">
+                                                Eliminar
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {sortedData.length === 0 && <p className="text-center text-gray-500 mt-8">No hay datos de {title} registrados.</p>}
+                            </div>
+                        </div>
+                    </Page>
+                );
+            };
+
+            const HtmlReportPage = () => {
+                const sortedReports = [...reconciliationReports].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                return (
+                    <Page>
+                         <Header title="Reporte Web" onBack={() => setCurrentPage(PAGE.HOME)} />
+                         <div className="p-2 sm:p-4 bg-white">
+                            <h1 className="text-xl font-bold text-center my-4">Informe de Conciliación de Caja</h1>
+                            {sortedReports.map(report => {
+                                return (
+                                <div key={report.id} className="mb-8">
+                                    <h2 className="text-lg font-semibold text-center bg-gray-200 p-2 rounded-t-lg">Fecha del Reporte: {report.date}</h2>
+                                    
+                                    {/* Table 1: Detailed by Shift */}
+                                    <div className="overflow-x-auto">
+                                    <table className="min-w-full text-xs sm:text-sm my-4 border shadow-md">
+                                        <caption className="font-bold p-2 bg-gray-100">1. Detalle por Turno y Forma de Pago</caption>
+                                        <thead className="bg-gray-700 text-white">
+                                            <tr>
+                                                <th className="p-2">Caja</th><th className="p-2">Turno</th>
+                                                <th className="p-2">Forma de Pago</th><th className="p-2">Esperado</th>
+                                                <th className="p-2">Real</th><th className="p-2">Diferencia</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                        {report.details.map(detail => (
+                                            Object.keys(PAYMENT_METHODS).map((key, idx) => {
+                                                const exp = parseFloat(detail.expected_details[key] || 0);
+                                                const act = parseFloat(detail.actual_details[key] || 0);
+                                                const diff = exp - act;
+
+                                                return (
+                                                    <tr key={`${detail.id}-${key}`} className="border-t hover:bg-gray-50">
+                                                        {idx === 0 && <td rowSpan={Object.keys(PAYMENT_METHODS).length} className="p-2 align-top text-center border-r font-medium">{detail.caja}</td>}
+                                                        {idx === 0 && <td rowSpan={Object.keys(PAYMENT_METHODS).length} className="p-2 align-top text-center border-r text-sm">{getShiftName(detail.shift)}</td>}
+                                                        <td className="p-2 text-left text-gray-700">{PAYMENT_METHODS[key]}</td>
+                                                        <td className="p-2 text-right text-green-700 font-medium">{exp.toFixed(2)}</td>
+                                                        <td className="p-2 text-right text-blue-700 font-medium">{act.toFixed(2)}</td>
+                                                        <td className={`p-2 text-right font-semibold ${Math.abs(diff) > 0.005 ? 'text-red-500' : 'text-gray-500'}`}>
+                                                            {diff.toFixed(2)}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        ))}
+                                        {/* Row for Turno Total */}
+                                        {report.details.map((detail, index) => (
+                                            <tr key={`total-${index}`} className="border-t-2 border-gray-400 bg-gray-100 font-bold">
+                                                <td colSpan="3" className="p-2 text-right">Total Turno {detail.caja}-{getShiftName(detail.shift)}:</td>
+                                                <td className="p-2 text-right">{detail.expected.toFixed(2)}</td>
+                                                <td className="p-2 text-right">{detail.actual.toFixed(2)}</td>
+                                                <td className={`p-2 text-right ${Math.abs(detail.difference) > 0.005 ? 'text-red-600' : 'text-green-600'}`}>{detail.difference.toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                        </tbody>
+                                    </table>
+                                    </div>
+                                    
+                                </div>
+                                )
+                            })}
+                            {sortedReports.length === 0 && <p className="text-center text-gray-500 mt-8">No hay reportes para generar el informe web.</p>}
+                         </div>
+                    </Page>
+                );
+            };
+
+            const AllDataPage = () => (
+                <Page>
+                    <Header title="Todos los Datos Crudos" onBack={() => setCurrentPage(PAGE.HOME)} />
+                    <div className="p-4 space-y-6">
+                        <div>
+                            <h2 className="text-lg font-bold mb-2 p-2 bg-gray-200 rounded-t-md">Datos Esperados (Sistema)</h2>
+                            <div className="bg-white p-2 rounded-b-md shadow max-h-64 overflow-y-auto">
+                                {[...cashierRecords].sort((a,b) => b.id.localeCompare(a.id)).map(r => (
+                                    <div key={r.id} className="text-sm p-2 border-b">
+                                        <b>{r.date}</b> | Caja: {r.caja}, Turno: {getShiftName(r.shift)} | Total: <b>{r.total_amount.toFixed(2)}</b>
+                                    </div>
+                                ))}
+                                {cashierRecords.length === 0 && <p className="text-center p-4 text-gray-500">No hay datos</p>}
+                            </div>
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-bold mb-2 p-2 bg-blue-200 rounded-t-md">Datos Reales (Recaudado)</h2>
+                             <div className="bg-white p-2 rounded-b-md shadow max-h-64 overflow-y-auto">
+                                {[...actualCollections].sort((a,b) => b.id.localeCompare(a.id)).map(r => (
+                                    <div key={r.id} className="text-sm p-2 border-b">
+                                        <b>{r.date}</b> | Caja: {r.caja}, Turno: {getShiftName(r.shift)} | Total: <b>{r.total_amount.toFixed(2)}</b>
+                                    </div>
+                                ))}
+                                {actualCollections.length === 0 && <p className="text-center p-4 text-gray-500">No hay datos</p>}
+                            </div>
+                        </div>
+                    </div>
+                </Page>
+            );
+
+            return (
+                <div className="max-w-md mx-auto bg-gray-50 min-h-screen shadow-lg">
+                    {/* Note: The CustomModal now supports onConfirm for deletion */}
+                    {isLoading && <Loader message={loadingMessage} />}
+                    {modal && <CustomModal title={modal.title} message={modal.message} onClose={modal.onClose || (() => setModal(null))} onConfirm={modal.onConfirm} confirmText={modal.confirmText} />}
+                    {isAuthReady ? renderContent() : <Loader message="Conectando servicios de seguridad..." />}
+                    {/* Display user ID for debugging in a multi-user context */}
+                    <footer className="text-xs text-gray-400 p-2 text-center bg-gray-100 border-t fixed bottom-0 w-full max-w-md mx-auto">
+                        User ID: {userId || 'Authenticating...'}
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<StrictMode><App /></StrictMode>);
+
+    </script>
+</body>
+</html>
